@@ -6,31 +6,27 @@ import { createClient } from "@supabase/supabase-js";
 
 type TaskStatus = "All" | "In Progress" | "To Do" | "Review" | "Done";
 
-type TeamMember = {
-  id: string;
-  full_name: string | null;
-  email: string | null;
-  role: string | null;
-};
-
-type DashboardTask = {
-  id: string;
-  title: string;
-  project: string;
-  due: string;
-  dueDate: string | null;
-  priority: string;
-  status: string;
-  initials: string;
-  tone: string;
-};
-
 type Profile = {
   id: string;
   full_name: string | null;
   email: string | null;
   role: string | null;
 };
+
+type Task = {
+  id: string;
+  title: string;
+  priority: string;
+  status: string;
+  due_date: string | null;
+  assigned_to: string | null;
+  created_at: string;
+};
+
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!
+);
 
 const menu = [
   ["▦", "Dashboard"],
@@ -43,215 +39,72 @@ const menu = [
   ["⚙", "Settings"],
 ];
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!
-);
-
 function statusLabel(status: string) {
-  if (status === "in_progress") return "In Progress";
-  if (status === "todo") return "To Do";
-  if (status === "review") return "Review";
-  if (status === "done") return "Done";
-  return status;
+  switch (status) {
+    case "in_progress":
+      return "In Progress";
+    case "todo":
+      return "To Do";
+    case "review":
+      return "Review";
+    case "done":
+      return "Done";
+    default:
+      return status;
+  }
 }
 
-function capitalize(value: string | null | undefined) {
-  if (!value) return "Medium";
-  return value.charAt(0).toUpperCase() + value.slice(1);
-}
-
-function initialsFromName(name: string) {
-  const parts = name.trim().split(/\s+/).filter(Boolean);
-
-  if (parts.length === 0) return "U";
-  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-
-  return (
-    parts[0].charAt(0) + parts[parts.length - 1].charAt(0)
-  ).toUpperCase();
+function priorityLabel(priority: string) {
+  if (!priority) return "Medium";
+  return priority.charAt(0).toUpperCase() + priority.slice(1);
 }
 
 function formatDueDate(date: string | null) {
   if (!date) return "No deadline";
 
-  const parsed = new Date(date);
-
-  if (Number.isNaN(parsed.getTime())) return "No deadline";
-
-  return `Due ${parsed.toLocaleDateString("en-US", {
+  return `Due ${new Date(date).toLocaleDateString("en-US", {
     month: "short",
     day: "numeric",
   })}`;
 }
 
-function getStatusValue(status: string) {
-  if (status === "In Progress") return "in_progress";
-  if (status === "To Do") return "todo";
-  if (status === "Review") return "review";
-  return "done";
-}
+function initials(name: string | null, email: string | null) {
+  const value = name?.trim() || email?.split("@")[0] || "ME";
 
-function getTone(index: number) {
-  const tones = ["blue", "purple", "orange", "green"];
-  return tones[index % tones.length];
+  const parts = value.split(/\s+/);
+
+  if (parts.length >= 2) {
+    return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
+  }
+
+  return value.slice(0, 2).toUpperCase();
 }
 
 export default function Home() {
-  const [filter, setFilter] = useState<TaskStatus>("All");
-  const [modalOpen, setModalOpen] = useState(false);
-  const [activeMenu, setActiveMenu] = useState("Dashboard");
-
   const [checkingSession, setCheckingSession] = useState(true);
   const [signedIn, setSignedIn] = useState(false);
 
   const [profile, setProfile] = useState<Profile | null>(null);
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [teamMembers, setTeamMembers] = useState<Profile[]>([]);
+
+  const [filter, setFilter] = useState<TaskStatus>("All");
+  const [activeMenu, setActiveMenu] = useState("Dashboard");
+  const [modalOpen, setModalOpen] = useState(false);
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [authError, setAuthError] = useState("");
   const [loginLoading, setLoginLoading] = useState(false);
 
-  const [dashboardTasks, setDashboardTasks] = useState<
-    DashboardTask[]
-  >([]);
-
-  const [tasksLoading, setTasksLoading] = useState(false);
-
   const [taskTitle, setTaskTitle] = useState("");
   const [taskPriority, setTaskPriority] = useState("medium");
+  const [taskDueDate, setTaskDueDate] = useState("");
+  const [assigneeId, setAssigneeId] = useState("");
   const [taskError, setTaskError] = useState("");
   const [savingTask, setSavingTask] = useState(false);
 
-  const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
-  const [assigneeId, setAssigneeId] = useState("");
-
-  const displayName =
-    profile?.full_name ||
-    profile?.email?.split("@")[0] ||
-    email.split("@")[0] ||
-    "User";
-
-  const displayRole = profile?.role || "Team Member";
-
-  const initials = initialsFromName(displayName);
-
-  const filteredTasks = useMemo(() => {
-    if (filter === "All") return dashboardTasks;
-
-    return dashboardTasks.filter(
-      (task) => task.status === filter
-    );
-  }, [filter, dashboardTasks]);
-
-  const totalTasks = dashboardTasks.length;
-
-  const inProgressTasks = dashboardTasks.filter(
-    (task) => task.status === "In Progress"
-  ).length;
-
-  const completedTasks = dashboardTasks.filter(
-    (task) => task.status === "Done"
-  ).length;
-
-  const today = new Date();
-  today.setHours(23, 59, 59, 999);
-
-  const overdueTasks = dashboardTasks.filter((task) => {
-    if (!task.dueDate) return false;
-    if (task.status === "Done") return false;
-
-    const due = new Date(task.dueDate);
-
-    return !Number.isNaN(due.getTime()) && due < today;
-  }).length;
-
-  const completionRate =
-    totalTasks > 0
-      ? Math.round((completedTasks / totalTasks) * 100)
-      : 0;
-
-  async function loadProfile(userId: string) {
-    const { data, error } = await supabase
-      .from("profiles")
-      .select("id,full_name,email,role")
-      .eq("id", userId)
-      .maybeSingle();
-
-    if (error) {
-      console.error("Profile loading error:", error);
-      setProfile(null);
-      return;
-    }
-
-    if (data) {
-      setProfile(data);
-    } else {
-      setProfile(null);
-    }
-  }
-
-  async function loadMyTasks(userId: string) {
-    setTasksLoading(true);
-
-    const { data, error } = await supabase
-      .from("tasks")
-      .select(
-        "id,title,status,priority,due_date,assigned_to,created_at"
-      )
-      .eq("assigned_to", userId)
-      .order("created_at", {
-        ascending: false,
-      });
-
-    if (error) {
-      console.error("Task loading error:", error);
-      setDashboardTasks([]);
-      setTasksLoading(false);
-      return;
-    }
-
-    const tasks: DashboardTask[] = (data || []).map(
-      (task, index) => ({
-        id: task.id,
-        title: task.title,
-        project: "SoftITBD",
-        due: formatDueDate(task.due_date),
-        dueDate: task.due_date,
-        priority: capitalize(task.priority),
-        status: statusLabel(task.status),
-        initials,
-        tone: getTone(index),
-      })
-    );
-
-    setDashboardTasks(tasks);
-    setTasksLoading(false);
-  }
-
-  async function loadTeamMembers() {
-    const { data, error } = await supabase
-      .from("profiles")
-      .select("id,full_name,email,role")
-      .order("full_name");
-
-    if (error) {
-      console.error("Team loading error:", error);
-      return;
-    }
-
-    if (data) {
-      setTeamMembers(data);
-    }
-  }
-
-  async function loadUserData(userId: string) {
-    await Promise.all([
-      loadProfile(userId),
-      loadMyTasks(userId),
-      loadTeamMembers(),
-    ]);
-  }
+  const [search, setSearch] = useState("");
 
   useEffect(() => {
     let mounted = true;
@@ -264,37 +117,16 @@ export default function Home() {
       if (!mounted) return;
 
       setSignedIn(Boolean(session));
-
-      if (session?.user) {
-        await loadUserData(session.user.id);
-      }
-
-      if (mounted) {
-        setCheckingSession(false);
-      }
+      setCheckingSession(false);
     }
 
     checkSession();
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange(
-      async (_event, session) => {
-        if (!mounted) return;
-
-        if (session?.user) {
-          setSignedIn(true);
-          await loadUserData(session.user.id);
-        } else {
-          setSignedIn(false);
-          setProfile(null);
-          setDashboardTasks([]);
-          setTeamMembers([]);
-        }
-
-        setCheckingSession(false);
-      }
-    );
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSignedIn(Boolean(session));
+    });
 
     return () => {
       mounted = false;
@@ -302,19 +134,135 @@ export default function Home() {
     };
   }, []);
 
-  async function signIn(
-    event: FormEvent<HTMLFormElement>
-  ) {
+  useEffect(() => {
+    if (!signedIn) {
+      setProfile(null);
+      setTasks([]);
+      setTeamMembers([]);
+      return;
+    }
+
+    async function loadData() {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      if (!user) return;
+
+      const [profileResult, taskResult, teamResult] =
+        await Promise.all([
+          supabase
+            .from("profiles")
+            .select("id,full_name,email,role")
+            .eq("id", user.id)
+            .maybeSingle(),
+
+          supabase
+            .from("tasks")
+            .select(
+              "id,title,priority,status,due_date,assigned_to,created_at"
+            )
+            .eq("assigned_to", user.id)
+            .order("created_at", { ascending: false }),
+
+          supabase
+            .from("profiles")
+            .select("id,full_name,email,role")
+            .order("full_name"),
+        ]);
+
+      if (profileResult.data) {
+        setProfile(profileResult.data);
+      } else {
+        setProfile({
+          id: user.id,
+          full_name: null,
+          email: user.email ?? null,
+          role: "Employee",
+        });
+      }
+
+      if (!taskResult.error && taskResult.data) {
+        setTasks(taskResult.data);
+      }
+
+      if (!teamResult.error && teamResult.data) {
+        setTeamMembers(teamResult.data);
+      }
+    }
+
+    loadData();
+  }, [signedIn]);
+
+  const displayName =
+    profile?.full_name?.trim() ||
+    profile?.email?.split("@")[0] ||
+    "User";
+
+  const displayRole = profile?.role || "Employee";
+
+  const userInitials = initials(profile?.full_name, profile?.email);
+
+  const filteredTasks = useMemo(() => {
+    let result = tasks;
+
+    if (filter !== "All") {
+      result = result.filter(
+        (task) => statusLabel(task.status) === filter
+      );
+    }
+
+    if (search.trim()) {
+      const query = search.toLowerCase();
+
+      result = result.filter((task) =>
+        task.title.toLowerCase().includes(query)
+      );
+    }
+
+    return result;
+  }, [tasks, filter, search]);
+
+  const totalTasks = tasks.length;
+
+  const inProgress = tasks.filter(
+    (task) => task.status === "in_progress"
+  ).length;
+
+  const completed = tasks.filter(
+    (task) => task.status === "done"
+  ).length;
+
+  const overdue = tasks.filter((task) => {
+    if (!task.due_date || task.status === "done") return false;
+
+    return new Date(task.due_date) < new Date();
+  }).length;
+
+  const completionRate =
+    totalTasks === 0
+      ? 0
+      : Math.round((completed / totalTasks) * 100);
+
+  const today = new Date();
+
+  const todayString = today.toLocaleDateString("en-US", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  });
+
+  async function signIn(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     setAuthError("");
     setLoginLoading(true);
 
-    const { error } =
-      await supabase.auth.signInWithPassword({
-        email: email.trim(),
-        password,
-      });
+    const { error } = await supabase.auth.signInWithPassword({
+      email: email.trim(),
+      password,
+    });
 
     if (error) {
       setAuthError(error.message);
@@ -328,12 +276,10 @@ export default function Home() {
   async function logout() {
     await supabase.auth.signOut();
 
-    setSignedIn(false);
     setProfile(null);
-    setDashboardTasks([]);
+    setTasks([]);
     setTeamMembers([]);
-    setFilter("All");
-    setActiveMenu("Dashboard");
+    setSignedIn(false);
   }
 
   async function updateTaskStatus(
@@ -349,17 +295,16 @@ export default function Home() {
       .eq("id", taskId);
 
     if (error) {
-      console.error("Status update error:", error);
       alert(`Status update failed: ${error.message}`);
       return;
     }
 
-    setDashboardTasks((current) =>
+    setTasks((current) =>
       current.map((task) =>
         task.id === taskId
           ? {
               ...task,
-              status: statusLabel(newStatus),
+              status: newStatus,
             }
           : task
       )
@@ -368,7 +313,7 @@ export default function Home() {
 
   async function createTask() {
     if (!taskTitle.trim()) {
-      setTaskError("Task title লিখুন।");
+      setTaskError("Please enter a task title.");
       return;
     }
 
@@ -380,9 +325,7 @@ export default function Home() {
     } = await supabase.auth.getUser();
 
     if (!user) {
-      setTaskError(
-        "Session শেষ হয়েছে। আবার login করুন।"
-      );
+      setTaskError("Your session has expired. Please login again.");
       setSavingTask(false);
       return;
     }
@@ -395,40 +338,26 @@ export default function Home() {
         status: "todo",
         created_by: user.id,
         assigned_to: assigneeId || user.id,
+        due_date: taskDueDate || null,
       })
       .select(
-        "id,title,status,priority,due_date,assigned_to,created_at"
+        "id,title,priority,status,due_date,assigned_to,created_at"
       )
       .single();
 
     if (error) {
-      console.error("Create task error:", error);
       setTaskError(error.message);
       setSavingTask(false);
       return;
     }
 
     if (data) {
-      const newTask: DashboardTask = {
-        id: data.id,
-        title: data.title,
-        project: "SoftITBD",
-        due: formatDueDate(data.due_date),
-        dueDate: data.due_date,
-        priority: capitalize(data.priority),
-        status: statusLabel(data.status),
-        initials,
-        tone: "blue",
-      };
-
-      setDashboardTasks((current) => [
-        newTask,
-        ...current,
-      ]);
+      setTasks((current) => [data, ...current]);
     }
 
     setTaskTitle("");
     setTaskPriority("medium");
+    setTaskDueDate("");
     setAssigneeId("");
     setSavingTask(false);
     setModalOpen(false);
@@ -445,10 +374,7 @@ export default function Home() {
   if (!signedIn) {
     return (
       <main className="login-screen">
-        <form
-          className="login-card"
-          onSubmit={signIn}
-        >
+        <form className="login-card" onSubmit={signIn}>
           <div className="brand-mark">✓</div>
 
           <h1>SoftITBD</h1>
@@ -458,7 +384,6 @@ export default function Home() {
 
           <label>
             Office email
-
             <input
               type="email"
               value={email}
@@ -472,7 +397,6 @@ export default function Home() {
 
           <label>
             Password
-
             <input
               type="password"
               value={password}
@@ -485,9 +409,7 @@ export default function Home() {
           </label>
 
           {authError && (
-            <div className="auth-error">
-              {authError}
-            </div>
+            <div className="auth-error">{authError}</div>
           )}
 
           <button
@@ -495,14 +417,11 @@ export default function Home() {
             type="submit"
             disabled={loginLoading}
           >
-            {loginLoading
-              ? "Signing in..."
-              : "Sign in"}
+            {loginLoading ? "Signing in..." : "Sign in"}
           </button>
 
           <small>
-            Use the Admin email and password you
-            created in Supabase.
+            Use your Supabase account email and password.
           </small>
         </form>
       </main>
@@ -521,30 +440,22 @@ export default function Home() {
           </div>
         </div>
 
-        <div className="menu-title">
-          MAIN MENU
-        </div>
+        <div className="menu-title">MAIN MENU</div>
 
         <nav>
           {menu.map(([icon, label]) => (
             <button
               key={label}
               className={`nav-item ${
-                activeMenu === label
-                  ? "active"
-                  : ""
+                activeMenu === label ? "active" : ""
               }`}
-              onClick={() =>
-                setActiveMenu(label)
-              }
+              onClick={() => setActiveMenu(label)}
             >
               <span>{icon}</span>
               {label}
 
               {label === "Notices" && (
-                <b className="notice-count">
-                  3
-                </b>
+                <b className="notice-count">3</b>
               )}
             </button>
           ))}
@@ -552,7 +463,7 @@ export default function Home() {
 
         <div className="profile-card">
           <div className="avatar blue">
-            {initials}
+            {userInitials}
           </div>
 
           <div>
@@ -564,7 +475,7 @@ export default function Home() {
             aria-label="Logout"
             onClick={logout}
           >
-            ↪
+            ⋮
           </button>
         </div>
       </aside>
@@ -582,7 +493,11 @@ export default function Home() {
               <span>⌕</span>
 
               <input
-                placeholder="Search tasks, projects..."
+                placeholder="Search tasks..."
+                value={search}
+                onChange={(event) =>
+                  setSearch(event.target.value)
+                }
               />
             </label>
 
@@ -596,9 +511,7 @@ export default function Home() {
 
             <button
               className="new-task"
-              onClick={() =>
-                setModalOpen(true)
-              }
+              onClick={() => setModalOpen(true)}
             >
               <span>＋</span>
               New Task
@@ -609,7 +522,7 @@ export default function Home() {
               onClick={logout}
             >
               <span className="avatar blue">
-                {initials}
+                {userInitials}
               </span>
 
               {displayName}
@@ -628,25 +541,14 @@ export default function Home() {
               </h1>
 
               <p>
-                {new Date().toLocaleDateString(
-                  "en-US",
-                  {
-                    weekday: "long",
-                    day: "numeric",
-                    month: "long",
-                    year: "numeric",
-                  }
-                )}{" "}
-                · Here&apos;s what&apos;s happening
+                {todayString} · Here's what's happening
                 today.
               </p>
             </div>
 
             <button
               className="new-task mobile-new"
-              onClick={() =>
-                setModalOpen(true)
-              }
+              onClick={() => setModalOpen(true)}
             >
               <span>＋</span>
               New Task
@@ -665,19 +567,15 @@ export default function Home() {
             <Stat
               icon="◷"
               color="orange"
-              value={String(
-                inProgressTasks
-              )}
+              value={String(inProgress)}
               label="In Progress"
-              note="Currently working"
+              note="Currently active"
             />
 
             <Stat
               icon="✓"
               color="green"
-              value={String(
-                completedTasks
-              )}
+              value={String(completed)}
               label="Completed"
               note={`${completionRate}% completion rate`}
             />
@@ -685,14 +583,12 @@ export default function Home() {
             <Stat
               icon="⚠"
               color="red"
-              value={String(
-                overdueTasks
-              )}
+              value={String(overdue)}
               label="Overdue"
               note={
-                overdueTasks > 0
+                overdue > 0
                   ? "Action needed"
-                  : "Everything on track"
+                  : "You're all caught up"
               }
             />
           </section>
@@ -700,9 +596,7 @@ export default function Home() {
           <section className="dashboard-grid">
             <div className="card task-card">
               <div className="card-head">
-                <h2>
-                  My Tasks Today
-                </h2>
+                <h2>My Tasks</h2>
 
                 <div className="filters">
                   {(
@@ -716,13 +610,9 @@ export default function Home() {
                   ).map((item) => (
                     <button
                       key={item}
-                      onClick={() =>
-                        setFilter(item)
-                      }
+                      onClick={() => setFilter(item)}
                       className={
-                        filter === item
-                          ? "selected"
-                          : ""
+                        filter === item ? "selected" : ""
                       }
                     >
                       {item}
@@ -732,207 +622,172 @@ export default function Home() {
               </div>
 
               <div className="task-list">
-                {tasksLoading ? (
-                  <p
-                    style={{
-                      padding: "20px",
-                    }}
-                  >
-                    Loading tasks...
-                  </p>
-                ) : filteredTasks.length === 0 ? (
-                  <p
-                    style={{
-                      padding: "20px",
-                    }}
-                  >
-                    No tasks found.
-                  </p>
+                {filteredTasks.length === 0 ? (
+                  <div style={{ padding: "30px" }}>
+                    <strong>No tasks found.</strong>
+                    <p>
+                      Create a new task or wait for a task
+                      to be assigned to you.
+                    </p>
+                  </div>
                 ) : (
-                  filteredTasks.map(
-                    (task) => (
-                      <article
-                        className="task-row"
-                        key={task.id}
+                  filteredTasks.map((task) => (
+                    <article
+                      className="task-row"
+                      key={task.id}
+                    >
+                      <button
+                        className="check"
+                        aria-label={`Complete ${task.title}`}
+                        onClick={() =>
+                          updateTaskStatus(
+                            task.id,
+                            task.status === "done"
+                              ? "todo"
+                              : "done"
+                          )
+                        }
+                      />
+
+                      <div className="task-copy">
+                        <h3>{task.title}</h3>
+
+                        <p>
+                          SoftITBD
+                          <span>•</span>
+                          {formatDueDate(task.due_date)}
+                        </p>
+                      </div>
+
+                      <span
+                        className={`priority ${task.priority.toLowerCase()}`}
                       >
-                        <button
-                          className="check"
-                          aria-label={`Complete ${task.title}`}
-                          onClick={() =>
-                            updateTaskStatus(
-                              task.id,
-                              "done"
-                            )
-                          }
-                        >
-                          {task.status ===
-                            "Done" && "✓"}
-                        </button>
+                        {priorityLabel(task.priority)}
+                      </span>
 
-                        <div className="task-copy">
-                          <h3>
-                            {task.title}
-                          </h3>
+                      <select
+                        className="status"
+                        value={task.status}
+                        onChange={(event) =>
+                          updateTaskStatus(
+                            task.id,
+                            event.target.value
+                          )
+                        }
+                      >
+                        <option value="todo">
+                          To Do
+                        </option>
 
-                          <p>
-                            {task.project}
-                            <span>•</span>
-                            {task.due}
-                          </p>
-                        </div>
+                        <option value="in_progress">
+                          In Progress
+                        </option>
 
-                        <span
-                          className={`priority ${task.priority.toLowerCase()}`}
-                        >
-                          {task.priority}
-                        </span>
+                        <option value="review">
+                          Review
+                        </option>
 
-                        <select
-                          className="status"
-                          value={getStatusValue(
-                            task.status
-                          )}
-                          onChange={(
-                            event
-                          ) =>
-                            updateTaskStatus(
-                              task.id,
-                              event.target.value
-                            )
-                          }
-                        >
-                          <option value="todo">
-                            To Do
-                          </option>
+                        <option value="done">
+                          Done
+                        </option>
+                      </select>
 
-                          <option value="in_progress">
-                            In Progress
-                          </option>
-
-                          <option value="review">
-                            Review
-                          </option>
-
-                          <option value="done">
-                            Done
-                          </option>
-                        </select>
-
-                        <span
-                          className={`avatar ${task.tone}`}
-                        >
-                          {task.initials}
-                        </span>
-                      </article>
-                    )
-                  )
+                      <span className="avatar blue">
+                        {userInitials}
+                      </span>
+                    </article>
+                  ))
                 )}
               </div>
 
               <button
                 className="view-all"
-                onClick={() =>
-                  setFilter("All")
-                }
+                onClick={() => setFilter("All")}
               >
-                View all tasks{" "}
-                <span>→</span>
+                View all tasks <span>→</span>
               </button>
             </div>
 
             <div className="card progress-card">
               <div className="card-head">
-                <h2>
-                  Task Progress
-                </h2>
-
-                <div className="legend">
-                  <span>
-                    <i className="done-dot" />
-                    Done
-                  </span>
-
-                  <span>
-                    <i className="total-dot" />
-                    Total
-                  </span>
-                </div>
+                <h2>Task Progress</h2>
               </div>
 
               <div className="chart">
-                {[
-                  "To Do",
-                  "In Progress",
-                  "Review",
-                  "Done",
-                ].map((status) => {
-                  const count =
-                    dashboardTasks.filter(
-                      (task) =>
-                        task.status === status
-                    ).length;
+                {["To Do", "In Progress", "Review", "Done"].map(
+                  (label) => {
+                    const count =
+                      label === "To Do"
+                        ? tasks.filter(
+                            (task) => task.status === "todo"
+                          ).length
+                        : label === "In Progress"
+                          ? inProgress
+                          : label === "Review"
+                            ? tasks.filter(
+                                (task) =>
+                                  task.status === "review"
+                              ).length
+                            : completed;
 
-                  const max =
-                    Math.max(
-                      dashboardTasks.length,
-                      1
-                    );
+                    const percentage =
+                      totalTasks === 0
+                        ? 0
+                        : Math.max(
+                            8,
+                            (count / totalTasks) * 100
+                          );
 
-                  const height =
-                    (count / max) * 100;
-
-                  return (
-                    <div
-                      className="bar-wrap"
-                      key={status}
-                    >
+                    return (
                       <div
-                        className="total-bar"
+                        className="bar-wrap"
+                        key={label}
                         style={{
-                          height: "100%",
+                          marginBottom: "18px",
                         }}
                       >
                         <div
-                          className="done-bar"
                           style={{
-                            height: `${Math.max(
-                              height,
-                              count > 0
-                                ? 8
-                                : 0
-                            )}%`,
+                            display: "flex",
+                            justifyContent:
+                              "space-between",
+                            marginBottom: "6px",
                           }}
-                        />
-                      </div>
+                        >
+                          <span>{label}</span>
+                          <strong>{count}</strong>
+                        </div>
 
-                      <span>
-                        {status ===
-                        "In Progress"
-                          ? "Progress"
-                          : status}
-                      </span>
-                    </div>
-                  );
-                })}
+                        <div
+                          className="total-bar"
+                          style={{
+                            height: "12px",
+                            width: "100%",
+                          }}
+                        >
+                          <div
+                            className="done-bar"
+                            style={{
+                              height: "100%",
+                              width: `${percentage}%`,
+                            }}
+                          />
+                        </div>
+                      </div>
+                    );
+                  }
+                )}
               </div>
 
               <div className="progress-summary">
                 <div>
-                  <span>
-                    Tasks completed
-                  </span>
-
+                  <span>Tasks completed</span>
                   <strong>
-                    {completedTasks}{" "}
-                    <em>
-                      / {totalTasks}
-                    </em>
+                    {completed} <em>/ {totalTasks}</em>
                   </strong>
                 </div>
 
-                <b>
-                  {completionRate}%
-                </b>
+                <b>{completionRate}%</b>
               </div>
             </div>
           </section>
@@ -942,9 +797,7 @@ export default function Home() {
       {modalOpen && (
         <div
           className="modal-backdrop"
-          onClick={() =>
-            setModalOpen(false)
-          }
+          onClick={() => setModalOpen(false)}
         >
           <div
             className="modal"
@@ -954,28 +807,21 @@ export default function Home() {
           >
             <button
               className="close"
-              onClick={() =>
-                setModalOpen(false)
-              }
+              onClick={() => setModalOpen(false)}
             >
               ×
             </button>
 
-            <h2>
-              Create New Task
-            </h2>
+            <h2>Create New Task</h2>
 
             <p>
-              Add a task to the SoftITBD
-              workspace.
+              Add a task to the SoftITBD workspace.
             </p>
 
             <input
               value={taskTitle}
               onChange={(event) =>
-                setTaskTitle(
-                  event.target.value
-                )
+                setTaskTitle(event.target.value)
               }
               placeholder="Task title"
             />
@@ -983,55 +829,49 @@ export default function Home() {
             <select
               value={taskPriority}
               onChange={(event) =>
-                setTaskPriority(
-                  event.target.value
-                )
+                setTaskPriority(event.target.value)
               }
             >
-              <option value="low">
-                Low
-              </option>
-
-              <option value="medium">
-                Medium
-              </option>
-
-              <option value="high">
-                High
-              </option>
-
+              <option value="low">Low</option>
+              <option value="medium">Medium</option>
+              <option value="high">High</option>
               <option value="critical">
                 Critical
               </option>
             </select>
 
+            <label style={{ marginTop: "10px" }}>
+              Due date
+              <input
+                type="date"
+                value={taskDueDate}
+                onChange={(event) =>
+                  setTaskDueDate(event.target.value)
+                }
+              />
+            </label>
+
             <select
               value={assigneeId}
               onChange={(event) =>
-                setAssigneeId(
-                  event.target.value
-                )
+                setAssigneeId(event.target.value)
               }
             >
               <option value="">
                 Assign to me
               </option>
 
-              {teamMembers.map(
-                (member) => (
-                  <option
-                    key={member.id}
-                    value={member.id}
-                  >
-                    {member.full_name ||
-                      member.email ||
-                      "Unnamed employee"}{" "}
-                    ·{" "}
-                    {member.role ||
-                      "Team Member"}
-                  </option>
-                )
-              )}
+              {teamMembers.map((member) => (
+                <option
+                  key={member.id}
+                  value={member.id}
+                >
+                  {member.full_name ||
+                    member.email ||
+                    "Unnamed employee"}{" "}
+                  · {member.role || "Employee"}
+                </option>
+              ))}
             </select>
 
             {taskError && (
@@ -1070,16 +910,10 @@ function Stat({
   note: string;
 }) {
   return (
-    <article
-      className={`stat-card ${color}`}
-    >
-      <div className="stat-icon">
-        {icon}
-      </div>
+    <article className={`stat-card ${color}`}>
+      <div className="stat-icon">{icon}</div>
 
-      <span className="chevron">
-        ⌃
-      </span>
+      <span className="chevron">⌃</span>
 
       <strong>{value}</strong>
 
