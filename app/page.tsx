@@ -1,3 +1,4 @@
+```tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -6,21 +7,24 @@ import { createClient } from "@supabase/supabase-js";
 
 type TaskStatus = "All" | "In Progress" | "To Do" | "Review" | "Done";
 
-type Profile = {
+type TeamMember = {
   id: string;
   full_name: string | null;
   email: string | null;
   role: string | null;
 };
 
-type Task = {
+type DashboardTask = {
   id: string;
   title: string;
+  project: string;
+  due: string;
+  dueDate: string | null;
   priority: string;
   status: string;
-  due_date: string | null;
-  assigned_to: string | null;
-  created_at: string;
+  assignedTo: string | null;
+  initials: string;
+  tone: string;
 };
 
 const supabase = createClient(
@@ -40,23 +44,34 @@ const menu = [
 ];
 
 function statusLabel(status: string) {
-  switch (status) {
-    case "in_progress":
-      return "In Progress";
-    case "todo":
-      return "To Do";
-    case "review":
-      return "Review";
-    case "done":
-      return "Done";
-    default:
-      return status;
-  }
+  if (status === "in_progress") return "In Progress";
+  if (status === "todo") return "To Do";
+  if (status === "review") return "Review";
+  if (status === "done") return "Done";
+  return status;
 }
 
-function priorityLabel(priority: string) {
-  if (!priority) return "Medium";
-  return priority.charAt(0).toUpperCase() + priority.slice(1);
+function statusValue(status: string) {
+  if (status === "In Progress") return "in_progress";
+  if (status === "To Do") return "todo";
+  if (status === "Review") return "review";
+  return "done";
+}
+
+function capitalize(value: string | null | undefined) {
+  if (!value) return "Medium";
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function initials(name: string | null | undefined, email?: string | null) {
+  const source = name?.trim() || email?.split("@")[0] || "User";
+  const parts = source.split(/\s+/).filter(Boolean);
+
+  if (parts.length >= 2) {
+    return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
+  }
+
+  return source.slice(0, 2).toUpperCase();
 }
 
 function formatDueDate(date: string | null) {
@@ -68,64 +83,156 @@ function formatDueDate(date: string | null) {
   })}`;
 }
 
-function initials(name: string | null, email: string | null) {
-  const value = name?.trim() || email?.split("@")[0] || "ME";
-
-  const parts = value.split(/\s+/);
-
-  if (parts.length >= 2) {
-    return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
-  }
-
-  return value.slice(0, 2).toUpperCase();
+function taskTone(index: number) {
+  const tones = ["blue", "purple", "orange", "green"];
+  return tones[index % tones.length];
 }
 
 export default function Home() {
-  const [checkingSession, setCheckingSession] = useState(true);
-  const [signedIn, setSignedIn] = useState(false);
-
-  const [profile, setProfile] = useState<Profile | null>(null);
-  const [tasks, setTasks] = useState<Task[]>([]);
-  const [teamMembers, setTeamMembers] = useState<Profile[]>([]);
-
   const [filter, setFilter] = useState<TaskStatus>("All");
   const [activeMenu, setActiveMenu] = useState("Dashboard");
-  const [modalOpen, setModalOpen] = useState(false);
+
+  const [checkingSession, setCheckingSession] = useState(true);
+  const [signedIn, setSignedIn] = useState(false);
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [authError, setAuthError] = useState("");
-  const [loginLoading, setLoginLoading] = useState(false);
 
+  const [profile, setProfile] = useState<TeamMember | null>(null);
+  const [dashboardTasks, setDashboardTasks] = useState<DashboardTask[]>([]);
+  const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
+
+  const [modalOpen, setModalOpen] = useState(false);
   const [taskTitle, setTaskTitle] = useState("");
   const [taskPriority, setTaskPriority] = useState("medium");
-  const [taskDueDate, setTaskDueDate] = useState("");
   const [assigneeId, setAssigneeId] = useState("");
   const [taskError, setTaskError] = useState("");
   const [savingTask, setSavingTask] = useState(false);
 
   const [search, setSearch] = useState("");
 
+  const currentName =
+    profile?.full_name?.trim() ||
+    profile?.email?.split("@")[0] ||
+    "User";
+
+  const currentInitials = initials(profile?.full_name, profile?.email);
+
+  const filteredTasks = useMemo(() => {
+    let result = dashboardTasks;
+
+    if (filter !== "All") {
+      result = result.filter((task) => task.status === filter);
+    }
+
+    if (search.trim()) {
+      const query = search.toLowerCase();
+
+      result = result.filter(
+        (task) =>
+          task.title.toLowerCase().includes(query) ||
+          task.project.toLowerCase().includes(query) ||
+          task.priority.toLowerCase().includes(query) ||
+          task.status.toLowerCase().includes(query)
+      );
+    }
+
+    return result;
+  }, [dashboardTasks, filter, search]);
+
+  const totalTasks = dashboardTasks.length;
+  const inProgress = dashboardTasks.filter(
+    (task) => task.status === "In Progress"
+  ).length;
+  const completed = dashboardTasks.filter(
+    (task) => task.status === "Done"
+  ).length;
+
+  const overdue = dashboardTasks.filter((task) => {
+    if (!task.dueDate || task.status === "Done") return false;
+    return new Date(task.dueDate).getTime() < Date.now();
+  }).length;
+
+  const completionRate =
+    totalTasks === 0 ? 0 : Math.round((completed / totalTasks) * 100);
+
+  const today = new Date();
+
+  const todayTasks = dashboardTasks.filter((task) => {
+    if (!task.dueDate) return false;
+
+    const date = new Date(task.dueDate);
+
+    return (
+      date.getFullYear() === today.getFullYear() &&
+      date.getMonth() === today.getMonth() &&
+      date.getDate() === today.getDate()
+    );
+  }).length;
+
+  const weeklyTasks = useMemo(() => {
+    const now = new Date();
+    const day = now.getDay();
+    const mondayOffset = day === 0 ? -6 : 1 - day;
+
+    const monday = new Date(now);
+    monday.setHours(0, 0, 0, 0);
+    monday.setDate(now.getDate() + mondayOffset);
+
+    return Array.from({ length: 7 }, (_, index) => {
+      const date = new Date(monday);
+      date.setDate(monday.getDate() + index);
+
+      const tasks = dashboardTasks.filter((task) => {
+        if (!task.dueDate) return false;
+
+        const due = new Date(task.dueDate);
+
+        return (
+          due.getFullYear() === date.getFullYear() &&
+          due.getMonth() === date.getMonth() &&
+          due.getDate() === date.getDate()
+        );
+      });
+
+      const done = tasks.filter((task) => task.status === "Done").length;
+
+      return {
+        label: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][index],
+        total: tasks.length,
+        done,
+      };
+    });
+  }, [dashboardTasks]);
+
+  const maxWeekly = Math.max(
+    ...weeklyTasks.map((item) => item.total),
+    1
+  );
+
   useEffect(() => {
     let mounted = true;
 
-    async function checkSession() {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-
+    supabase.auth.getSession().then(({ data }) => {
       if (!mounted) return;
 
-      setSignedIn(Boolean(session));
+      setSignedIn(Boolean(data.session));
       setCheckingSession(false);
-    }
-
-    checkSession();
+    });
 
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!mounted) return;
+
       setSignedIn(Boolean(session));
+
+      if (!session) {
+        setProfile(null);
+        setDashboardTasks([]);
+        setTeamMembers([]);
+      }
     });
 
     return () => {
@@ -135,129 +242,72 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    if (!signedIn) {
-      setProfile(null);
-      setTasks([]);
-      setTeamMembers([]);
-      return;
-    }
+    if (!signedIn) return;
+
+    let cancelled = false;
 
     async function loadData() {
       const {
         data: { user },
       } = await supabase.auth.getUser();
 
-      if (!user) return;
+      if (!user || cancelled) return;
 
-      const [profileResult, taskResult, teamResult] =
-        await Promise.all([
-          supabase
-            .from("profiles")
-            .select("id,full_name,email,role")
-            .eq("id", user.id)
-            .maybeSingle(),
+      const profileResult = await supabase
+        .from("profiles")
+        .select("id,full_name,email,role")
+        .eq("id", user.id)
+        .maybeSingle();
 
-          supabase
-            .from("tasks")
-            .select(
-              "id,title,priority,status,due_date,assigned_to,created_at"
-            )
-            .eq("assigned_to", user.id)
-            .order("created_at", { ascending: false }),
-
-          supabase
-            .from("profiles")
-            .select("id,full_name,email,role")
-            .order("full_name"),
-        ]);
-
-      if (profileResult.data) {
+      if (!cancelled && profileResult.data) {
         setProfile(profileResult.data);
-      } else {
-        setProfile({
-          id: user.id,
-          full_name: null,
-          email: user.email ?? null,
-          role: "Employee",
-        });
       }
 
-      if (!taskResult.error && taskResult.data) {
-        setTasks(taskResult.data);
+      const taskResult = await supabase
+        .from("tasks")
+        .select(
+          "id,title,status,priority,due_date,assigned_to,created_at"
+        )
+        .eq("assigned_to", user.id)
+        .order("created_at", { ascending: false });
+
+      if (!cancelled && taskResult.data) {
+        setDashboardTasks(
+          taskResult.data.map((task, index) => ({
+            id: task.id,
+            title: task.title,
+            project: "SoftITBD",
+            due: formatDueDate(task.due_date),
+            dueDate: task.due_date,
+            priority: capitalize(task.priority),
+            status: statusLabel(task.status),
+            assignedTo: task.assigned_to,
+            initials: currentInitials,
+            tone: taskTone(index),
+          }))
+        );
       }
 
-      if (!teamResult.error && teamResult.data) {
+      const teamResult = await supabase
+        .from("profiles")
+        .select("id,full_name,email,role")
+        .order("full_name");
+
+      if (!cancelled && teamResult.data) {
         setTeamMembers(teamResult.data);
       }
     }
 
     loadData();
-  }, [signedIn]);
 
-  const displayName =
-    profile?.full_name?.trim() ||
-    profile?.email?.split("@")[0] ||
-    "User";
-
-  const displayRole = profile?.role || "Employee";
-
-  const userInitials = initials(profile?.full_name, profile?.email);
-
-  const filteredTasks = useMemo(() => {
-    let result = tasks;
-
-    if (filter !== "All") {
-      result = result.filter(
-        (task) => statusLabel(task.status) === filter
-      );
-    }
-
-    if (search.trim()) {
-      const query = search.toLowerCase();
-
-      result = result.filter((task) =>
-        task.title.toLowerCase().includes(query)
-      );
-    }
-
-    return result;
-  }, [tasks, filter, search]);
-
-  const totalTasks = tasks.length;
-
-  const inProgress = tasks.filter(
-    (task) => task.status === "in_progress"
-  ).length;
-
-  const completed = tasks.filter(
-    (task) => task.status === "done"
-  ).length;
-
-  const overdue = tasks.filter((task) => {
-    if (!task.due_date || task.status === "done") return false;
-
-    return new Date(task.due_date) < new Date();
-  }).length;
-
-  const completionRate =
-    totalTasks === 0
-      ? 0
-      : Math.round((completed / totalTasks) * 100);
-
-  const today = new Date();
-
-  const todayString = today.toLocaleDateString("en-US", {
-    weekday: "long",
-    day: "numeric",
-    month: "long",
-    year: "numeric",
-  });
+    return () => {
+      cancelled = true;
+    };
+  }, [signedIn, currentInitials]);
 
   async function signIn(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-
     setAuthError("");
-    setLoginLoading(true);
 
     const { error } = await supabase.auth.signInWithPassword({
       email: email.trim(),
@@ -266,26 +316,21 @@ export default function Home() {
 
     if (error) {
       setAuthError(error.message);
-      setLoginLoading(false);
       return;
     }
 
-    setLoginLoading(false);
+    setPassword("");
   }
 
   async function logout() {
     await supabase.auth.signOut();
-
-    setProfile(null);
-    setTasks([]);
-    setTeamMembers([]);
     setSignedIn(false);
+    setProfile(null);
+    setDashboardTasks([]);
+    setTeamMembers([]);
   }
 
-  async function updateTaskStatus(
-    taskId: string,
-    newStatus: string
-  ) {
+  async function updateTaskStatus(taskId: string, newStatus: string) {
     const { error } = await supabase
       .from("tasks")
       .update({
@@ -299,12 +344,12 @@ export default function Home() {
       return;
     }
 
-    setTasks((current) =>
+    setDashboardTasks((current) =>
       current.map((task) =>
         task.id === taskId
           ? {
               ...task,
-              status: newStatus,
+              status: statusLabel(newStatus),
             }
           : task
       )
@@ -313,7 +358,7 @@ export default function Home() {
 
   async function createTask() {
     if (!taskTitle.trim()) {
-      setTaskError("Please enter a task title.");
+      setTaskError("Task title লিখুন।");
       return;
     }
 
@@ -325,7 +370,7 @@ export default function Home() {
     } = await supabase.auth.getUser();
 
     if (!user) {
-      setTaskError("Your session has expired. Please login again.");
+      setTaskError("Session শেষ হয়েছে। আবার login করুন।");
       setSavingTask(false);
       return;
     }
@@ -338,10 +383,9 @@ export default function Home() {
         status: "todo",
         created_by: user.id,
         assigned_to: assigneeId || user.id,
-        due_date: taskDueDate || null,
       })
       .select(
-        "id,title,priority,status,due_date,assigned_to,created_at"
+        "id,title,status,priority,due_date,assigned_to,created_at"
       )
       .single();
 
@@ -352,15 +396,587 @@ export default function Home() {
     }
 
     if (data) {
-      setTasks((current) => [data, ...current]);
+      setDashboardTasks((current) => [
+        {
+          id: data.id,
+          title: data.title,
+          project: "SoftITBD",
+          due: formatDueDate(data.due_date),
+          dueDate: data.due_date,
+          priority: capitalize(data.priority),
+          status: statusLabel(data.status),
+          assignedTo: data.assigned_to,
+          initials: currentInitials,
+          tone: "blue",
+        },
+        ...current,
+      ]);
     }
 
     setTaskTitle("");
     setTaskPriority("medium");
-    setTaskDueDate("");
     setAssigneeId("");
     setSavingTask(false);
     setModalOpen(false);
+  }
+
+  function renderTaskRow(task: DashboardTask) {
+    return (
+      <article className="task-row" key={task.id}>
+        <button
+          className="check"
+          aria-label={`Mark ${task.title} as done`}
+          onClick={() =>
+            updateTaskStatus(
+              task.id,
+              task.status === "Done" ? "todo" : "done"
+            )
+          }
+        />
+
+        <div className="task-copy">
+          <h3>{task.title}</h3>
+
+          <p>
+            {task.project}
+            <span>•</span>
+            {task.due}
+          </p>
+        </div>
+
+        <span
+          className={`priority ${task.priority.toLowerCase()}`}
+        >
+          {task.priority}
+        </span>
+
+        <select
+          className="status"
+          value={statusValue(task.status)}
+          onChange={(event) =>
+            updateTaskStatus(task.id, event.target.value)
+          }
+        >
+          <option value="todo">To Do</option>
+          <option value="in_progress">In Progress</option>
+          <option value="review">Review</option>
+          <option value="done">Done</option>
+        </select>
+
+        <span className={`avatar ${task.tone}`}>
+          {task.initials}
+        </span>
+      </article>
+    );
+  }
+
+  function renderDashboard() {
+    return (
+      <>
+        <section className="welcome">
+          <div>
+            <h1>
+              Good morning, {currentName} <span>👋</span>
+            </h1>
+
+            <p>
+              {today.toLocaleDateString("en-US", {
+                weekday: "long",
+                day: "numeric",
+                month: "long",
+                year: "numeric",
+              })}{" "}
+              · Here&apos;s what&apos;s happening today.
+            </p>
+          </div>
+
+          <button
+            className="new-task mobile-new"
+            onClick={() => setModalOpen(true)}
+          >
+            <span>＋</span>
+            New Task
+          </button>
+        </section>
+
+        <section className="stats-grid">
+          <Stat
+            icon="☑"
+            color="sky"
+            value={String(totalTasks)}
+            label="Total Tasks"
+            note={`${todayTasks} due today`}
+          />
+
+          <Stat
+            icon="◷"
+            color="orange"
+            value={String(inProgress)}
+            label="In Progress"
+            note={`${Math.max(inProgress, 0)} active`}
+          />
+
+          <Stat
+            icon="✓"
+            color="green"
+            value={String(completed)}
+            label="Completed"
+            note={`${completionRate}% completion rate`}
+          />
+
+          <Stat
+            icon="⚠"
+            color="red"
+            value={String(overdue)}
+            label="Overdue"
+            note={overdue ? "Action needed" : "Nothing overdue"}
+          />
+        </section>
+
+        <section className="dashboard-grid">
+          <div className="card task-card">
+            <div className="card-head">
+              <h2>My Tasks</h2>
+
+              <div className="filters">
+                {(
+                  [
+                    "All",
+                    "In Progress",
+                    "To Do",
+                    "Review",
+                    "Done",
+                  ] as TaskStatus[]
+                ).map((item) => (
+                  <button
+                    key={item}
+                    onClick={() => setFilter(item)}
+                    className={filter === item ? "selected" : ""}
+                  >
+                    {item}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="task-list">
+              {filteredTasks.length === 0 ? (
+                <p style={{ padding: "20px" }}>
+                  No tasks found.
+                </p>
+              ) : (
+                filteredTasks.slice(0, 8).map(renderTaskRow)
+              )}
+            </div>
+
+            <button
+              className="view-all"
+              onClick={() => setActiveMenu("My Tasks")}
+            >
+              View all tasks <span>→</span>
+            </button>
+          </div>
+
+          <div className="card progress-card">
+            <div className="card-head">
+              <h2>Weekly Progress</h2>
+
+              <div className="legend">
+                <span>
+                  <i className="done-dot" />
+                  Done
+                </span>
+
+                <span>
+                  <i className="total-dot" />
+                  Total
+                </span>
+              </div>
+            </div>
+
+            <div className="chart">
+              {weeklyTasks.map((item) => {
+                const totalHeight =
+                  item.total === 0
+                    ? 8
+                    : Math.max(
+                        15,
+                        (item.total / maxWeekly) * 100
+                      );
+
+                const doneHeight =
+                  item.total === 0
+                    ? 0
+                    : (item.done / item.total) * totalHeight;
+
+                return (
+                  <div className="bar-wrap" key={item.label}>
+                    <div
+                      className="total-bar"
+                      style={{
+                        height: `${totalHeight}%`,
+                      }}
+                    >
+                      <div
+                        className="done-bar"
+                        style={{
+                          height: `${doneHeight}%`,
+                        }}
+                      />
+                    </div>
+
+                    <span>{item.label}</span>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="progress-summary">
+              <div>
+                <span>Tasks completed</span>
+                <strong>
+                  {completed} <em>/ {totalTasks}</em>
+                </strong>
+              </div>
+
+              <b>{completionRate}%</b>
+            </div>
+          </div>
+        </section>
+      </>
+    );
+  }
+
+  function renderMyTasks() {
+    return (
+      <section className="card task-card">
+        <div className="card-head">
+          <h2>My Tasks</h2>
+
+          <button
+            className="new-task"
+            onClick={() => setModalOpen(true)}
+          >
+            ＋ New Task
+          </button>
+        </div>
+
+        <div className="filters" style={{ padding: "16px" }}>
+          {(
+            [
+              "All",
+              "In Progress",
+              "To Do",
+              "Review",
+              "Done",
+            ] as TaskStatus[]
+          ).map((item) => (
+            <button
+              key={item}
+              onClick={() => setFilter(item)}
+              className={filter === item ? "selected" : ""}
+            >
+              {item}
+            </button>
+          ))}
+        </div>
+
+        <div className="task-list">
+          {filteredTasks.length === 0 ? (
+            <p style={{ padding: "24px" }}>No tasks found.</p>
+          ) : (
+            filteredTasks.map(renderTaskRow)
+          )}
+        </div>
+      </section>
+    );
+  }
+
+  function renderTaskBoard() {
+    const columns = [
+      { key: "To Do", title: "To Do" },
+      { key: "In Progress", title: "In Progress" },
+      { key: "Review", title: "Review" },
+      { key: "Done", title: "Done" },
+    ];
+
+    return (
+      <section>
+        <div className="welcome">
+          <div>
+            <h1>Task Board</h1>
+            <p>Manage your tasks by workflow status.</p>
+          </div>
+
+          <button
+            className="new-task"
+            onClick={() => setModalOpen(true)}
+          >
+            ＋ New Task
+          </button>
+        </div>
+
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns:
+              "repeat(auto-fit, minmax(240px, 1fr))",
+            gap: "18px",
+          }}
+        >
+          {columns.map((column) => {
+            const tasks = dashboardTasks.filter(
+              (task) => task.status === column.key
+            );
+
+            return (
+              <div className="card" key={column.key}>
+                <div className="card-head">
+                  <h2>{column.title}</h2>
+                  <strong>{tasks.length}</strong>
+                </div>
+
+                <div className="task-list">
+                  {tasks.length === 0 ? (
+                    <p style={{ padding: "20px" }}>
+                      No tasks
+                    </p>
+                  ) : (
+                    tasks.map(renderTaskRow)
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </section>
+    );
+  }
+
+  function renderTeam() {
+    return (
+      <section className="card">
+        <div className="card-head">
+          <h2>Team</h2>
+          <span>{teamMembers.length} members</span>
+        </div>
+
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns:
+              "repeat(auto-fit, minmax(220px, 1fr))",
+            gap: "16px",
+            padding: "20px",
+          }}
+        >
+          {teamMembers.map((member) => (
+            <article
+              key={member.id}
+              className="card"
+              style={{ padding: "18px" }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "12px",
+                }}
+              >
+                <span className="avatar blue">
+                  {initials(member.full_name, member.email)}
+                </span>
+
+                <div>
+                  <strong>
+                    {member.full_name ||
+                      member.email ||
+                      "Unnamed"}
+                  </strong>
+
+                  <p style={{ margin: "4px 0 0" }}>
+                    {member.role || "Team member"}
+                  </p>
+                </div>
+              </div>
+
+              {member.email && (
+                <p style={{ marginTop: "14px" }}>
+                  {member.email}
+                </p>
+              )}
+            </article>
+          ))}
+        </div>
+      </section>
+    );
+  }
+
+  function renderCalendar() {
+    const calendarTasks = [...dashboardTasks]
+      .filter((task) => task.dueDate)
+      .sort(
+        (a, b) =>
+          new Date(a.dueDate!).getTime() -
+          new Date(b.dueDate!).getTime()
+      );
+
+    return (
+      <section className="card">
+        <div className="card-head">
+          <h2>Calendar</h2>
+          <span>Upcoming task deadlines</span>
+        </div>
+
+        <div className="task-list">
+          {calendarTasks.length === 0 ? (
+            <p style={{ padding: "24px" }}>
+              No tasks with deadlines.
+            </p>
+          ) : (
+            calendarTasks.map(renderTaskRow)
+          )}
+        </div>
+      </section>
+    );
+  }
+
+  function renderNotices() {
+    return (
+      <section className="card">
+        <div className="card-head">
+          <h2>Notices</h2>
+        </div>
+
+        <div style={{ padding: "24px" }}>
+          <article
+            className="card"
+            style={{ padding: "20px", marginBottom: "14px" }}
+          >
+            <h3>Welcome to SoftITBD Task Manager</h3>
+            <p>
+              Use the Task Board to manage your work and keep
+              your tasks updated.
+            </p>
+          </article>
+
+          <article className="card" style={{ padding: "20px" }}>
+            <h3>Task status reminder</h3>
+            <p>
+              Please keep task statuses updated so the dashboard
+              statistics remain accurate.
+            </p>
+          </article>
+        </div>
+      </section>
+    );
+  }
+
+  function renderReports() {
+    return (
+      <section>
+        <div className="welcome">
+          <div>
+            <h1>Reports</h1>
+            <p>Overview of your current task performance.</p>
+          </div>
+        </div>
+
+        <section className="stats-grid">
+          <Stat
+            icon="☑"
+            color="sky"
+            value={String(totalTasks)}
+            label="Total Tasks"
+            note="Assigned to you"
+          />
+
+          <Stat
+            icon="◷"
+            color="orange"
+            value={String(inProgress)}
+            label="In Progress"
+            note="Currently active"
+          />
+
+          <Stat
+            icon="✓"
+            color="green"
+            value={String(completed)}
+            label="Completed"
+            note={`${completionRate}% completion`}
+          />
+
+          <Stat
+            icon="⚠"
+            color="red"
+            value={String(overdue)}
+            label="Overdue"
+            note="Needs attention"
+          />
+        </section>
+      </section>
+    );
+  }
+
+  function renderSettings() {
+    return (
+      <section className="card">
+        <div className="card-head">
+          <h2>Settings</h2>
+        </div>
+
+        <div style={{ padding: "24px" }}>
+          <h3>Profile</h3>
+
+          <p>
+            <strong>Name:</strong> {currentName}
+          </p>
+
+          <p>
+            <strong>Email:</strong>{" "}
+            {profile?.email || "Not available"}
+          </p>
+
+          <p>
+            <strong>Role:</strong>{" "}
+            {profile?.role || "Team member"}
+          </p>
+
+          <button className="new-task" onClick={logout}>
+            Logout
+          </button>
+        </div>
+      </section>
+    );
+  }
+
+  function renderActivePage() {
+    switch (activeMenu) {
+      case "My Tasks":
+        return renderMyTasks();
+
+      case "Task Board":
+        return renderTaskBoard();
+
+      case "Team":
+        return renderTeam();
+
+      case "Calendar":
+        return renderCalendar();
+
+      case "Notices":
+        return renderNotices();
+
+      case "Reports":
+        return renderReports();
+
+      case "Settings":
+        return renderSettings();
+
+      default:
+        return renderDashboard();
+    }
   }
 
   if (checkingSession) {
@@ -384,6 +1000,7 @@ export default function Home() {
 
           <label>
             Office email
+
             <input
               type="email"
               value={email}
@@ -397,6 +1014,7 @@ export default function Home() {
 
           <label>
             Password
+
             <input
               type="password"
               value={password}
@@ -412,16 +1030,13 @@ export default function Home() {
             <div className="auth-error">{authError}</div>
           )}
 
-          <button
-            className="new-task"
-            type="submit"
-            disabled={loginLoading}
-          >
-            {loginLoading ? "Signing in..." : "Sign in"}
+          <button className="new-task" type="submit">
+            Sign in
           </button>
 
           <small>
-            Use your Supabase account email and password.
+            Use the Admin email and password you created in
+            Supabase.
           </small>
         </form>
       </main>
@@ -449,26 +1064,28 @@ export default function Home() {
               className={`nav-item ${
                 activeMenu === label ? "active" : ""
               }`}
-              onClick={() => setActiveMenu(label)}
+              onClick={() => {
+                setActiveMenu(label);
+                setFilter("All");
+              }}
             >
               <span>{icon}</span>
+
               {label}
 
               {label === "Notices" && (
-                <b className="notice-count">3</b>
+                <b className="notice-count">2</b>
               )}
             </button>
           ))}
         </nav>
 
         <div className="profile-card">
-          <div className="avatar blue">
-            {userInitials}
-          </div>
+          <div className="avatar blue">{currentInitials}</div>
 
           <div>
-            <strong>{displayName}</strong>
-            <span>{displayRole}</span>
+            <strong>{currentName}</strong>
+            <span>{profile?.role || "Team Member"}</span>
           </div>
 
           <button
@@ -493,7 +1110,7 @@ export default function Home() {
               <span>⌕</span>
 
               <input
-                placeholder="Search tasks..."
+                placeholder="Search tasks, projects..."
                 value={search}
                 onChange={(event) =>
                   setSearch(event.target.value)
@@ -504,6 +1121,7 @@ export default function Home() {
             <button
               className="bell"
               aria-label="Notifications"
+              onClick={() => setActiveMenu("Notices")}
             >
               ♧
               <i />
@@ -522,276 +1140,17 @@ export default function Home() {
               onClick={logout}
             >
               <span className="avatar blue">
-                {userInitials}
+                {currentInitials}
               </span>
 
-              {displayName}
+              {currentName}
 
               <b>Logout</b>
             </button>
           </div>
         </header>
 
-        <div className="content">
-          <section className="welcome">
-            <div>
-              <h1>
-                Good morning, {displayName}{" "}
-                <span>👋</span>
-              </h1>
-
-              <p>
-                {todayString} · Here's what's happening
-                today.
-              </p>
-            </div>
-
-            <button
-              className="new-task mobile-new"
-              onClick={() => setModalOpen(true)}
-            >
-              <span>＋</span>
-              New Task
-            </button>
-          </section>
-
-          <section className="stats-grid">
-            <Stat
-              icon="☑"
-              color="sky"
-              value={String(totalTasks)}
-              label="Total Tasks"
-              note="Your assigned tasks"
-            />
-
-            <Stat
-              icon="◷"
-              color="orange"
-              value={String(inProgress)}
-              label="In Progress"
-              note="Currently active"
-            />
-
-            <Stat
-              icon="✓"
-              color="green"
-              value={String(completed)}
-              label="Completed"
-              note={`${completionRate}% completion rate`}
-            />
-
-            <Stat
-              icon="⚠"
-              color="red"
-              value={String(overdue)}
-              label="Overdue"
-              note={
-                overdue > 0
-                  ? "Action needed"
-                  : "You're all caught up"
-              }
-            />
-          </section>
-
-          <section className="dashboard-grid">
-            <div className="card task-card">
-              <div className="card-head">
-                <h2>My Tasks</h2>
-
-                <div className="filters">
-                  {(
-                    [
-                      "All",
-                      "In Progress",
-                      "To Do",
-                      "Review",
-                      "Done",
-                    ] as TaskStatus[]
-                  ).map((item) => (
-                    <button
-                      key={item}
-                      onClick={() => setFilter(item)}
-                      className={
-                        filter === item ? "selected" : ""
-                      }
-                    >
-                      {item}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div className="task-list">
-                {filteredTasks.length === 0 ? (
-                  <div style={{ padding: "30px" }}>
-                    <strong>No tasks found.</strong>
-                    <p>
-                      Create a new task or wait for a task
-                      to be assigned to you.
-                    </p>
-                  </div>
-                ) : (
-                  filteredTasks.map((task) => (
-                    <article
-                      className="task-row"
-                      key={task.id}
-                    >
-                      <button
-                        className="check"
-                        aria-label={`Complete ${task.title}`}
-                        onClick={() =>
-                          updateTaskStatus(
-                            task.id,
-                            task.status === "done"
-                              ? "todo"
-                              : "done"
-                          )
-                        }
-                      />
-
-                      <div className="task-copy">
-                        <h3>{task.title}</h3>
-
-                        <p>
-                          SoftITBD
-                          <span>•</span>
-                          {formatDueDate(task.due_date)}
-                        </p>
-                      </div>
-
-                      <span
-                        className={`priority ${task.priority.toLowerCase()}`}
-                      >
-                        {priorityLabel(task.priority)}
-                      </span>
-
-                      <select
-                        className="status"
-                        value={task.status}
-                        onChange={(event) =>
-                          updateTaskStatus(
-                            task.id,
-                            event.target.value
-                          )
-                        }
-                      >
-                        <option value="todo">
-                          To Do
-                        </option>
-
-                        <option value="in_progress">
-                          In Progress
-                        </option>
-
-                        <option value="review">
-                          Review
-                        </option>
-
-                        <option value="done">
-                          Done
-                        </option>
-                      </select>
-
-                      <span className="avatar blue">
-                        {userInitials}
-                      </span>
-                    </article>
-                  ))
-                )}
-              </div>
-
-              <button
-                className="view-all"
-                onClick={() => setFilter("All")}
-              >
-                View all tasks <span>→</span>
-              </button>
-            </div>
-
-            <div className="card progress-card">
-              <div className="card-head">
-                <h2>Task Progress</h2>
-              </div>
-
-              <div className="chart">
-                {["To Do", "In Progress", "Review", "Done"].map(
-                  (label) => {
-                    const count =
-                      label === "To Do"
-                        ? tasks.filter(
-                            (task) => task.status === "todo"
-                          ).length
-                        : label === "In Progress"
-                          ? inProgress
-                          : label === "Review"
-                            ? tasks.filter(
-                                (task) =>
-                                  task.status === "review"
-                              ).length
-                            : completed;
-
-                    const percentage =
-                      totalTasks === 0
-                        ? 0
-                        : Math.max(
-                            8,
-                            (count / totalTasks) * 100
-                          );
-
-                    return (
-                      <div
-                        className="bar-wrap"
-                        key={label}
-                        style={{
-                          marginBottom: "18px",
-                        }}
-                      >
-                        <div
-                          style={{
-                            display: "flex",
-                            justifyContent:
-                              "space-between",
-                            marginBottom: "6px",
-                          }}
-                        >
-                          <span>{label}</span>
-                          <strong>{count}</strong>
-                        </div>
-
-                        <div
-                          className="total-bar"
-                          style={{
-                            height: "12px",
-                            width: "100%",
-                          }}
-                        >
-                          <div
-                            className="done-bar"
-                            style={{
-                              height: "100%",
-                              width: `${percentage}%`,
-                            }}
-                          />
-                        </div>
-                      </div>
-                    );
-                  }
-                )}
-              </div>
-
-              <div className="progress-summary">
-                <div>
-                  <span>Tasks completed</span>
-                  <strong>
-                    {completed} <em>/ {totalTasks}</em>
-                  </strong>
-                </div>
-
-                <b>{completionRate}%</b>
-              </div>
-            </div>
-          </section>
-        </div>
+        <div className="content">{renderActivePage()}</div>
       </section>
 
       {modalOpen && (
@@ -835,21 +1194,8 @@ export default function Home() {
               <option value="low">Low</option>
               <option value="medium">Medium</option>
               <option value="high">High</option>
-              <option value="critical">
-                Critical
-              </option>
+              <option value="critical">Critical</option>
             </select>
-
-            <label style={{ marginTop: "10px" }}>
-              Due date
-              <input
-                type="date"
-                value={taskDueDate}
-                onChange={(event) =>
-                  setTaskDueDate(event.target.value)
-                }
-              />
-            </label>
 
             <select
               value={assigneeId}
@@ -857,9 +1203,7 @@ export default function Home() {
                 setAssigneeId(event.target.value)
               }
             >
-              <option value="">
-                Assign to me
-              </option>
+              <option value="">Assign to me</option>
 
               {teamMembers.map((member) => (
                 <option
@@ -869,7 +1213,7 @@ export default function Home() {
                   {member.full_name ||
                     member.email ||
                     "Unnamed employee"}{" "}
-                  · {member.role || "Employee"}
+                  · {member.role || "Team member"}
                 </option>
               ))}
             </select>
@@ -885,9 +1229,7 @@ export default function Home() {
               disabled={savingTask}
               onClick={createTask}
             >
-              {savingTask
-                ? "Saving..."
-                : "Create Task"}
+              {savingTask ? "Saving..." : "Create Task"}
             </button>
           </div>
         </div>
@@ -923,3 +1265,4 @@ function Stat({
     </article>
   );
 }
+```
