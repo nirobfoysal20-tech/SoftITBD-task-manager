@@ -166,6 +166,9 @@ export default function Home() {
   const [search, setSearch] =
     useState("");
 
+  const [greeting, setGreeting] =
+    useState("Good morning");
+
   const currentName =
     profile?.full_name?.trim() ||
     profile?.email?.split("@")[0] ||
@@ -175,6 +178,33 @@ export default function Home() {
     profile?.full_name,
     profile?.email
   );
+
+  useEffect(() => {
+    function updateGreeting() {
+      const hour = new Date().getHours();
+
+      if (hour >= 5 && hour < 12) {
+        setGreeting("Good morning");
+      } else if (hour >= 12 && hour < 17) {
+        setGreeting("Good afternoon");
+      } else if (hour >= 17 && hour < 21) {
+        setGreeting("Good evening");
+      } else {
+        setGreeting("Good night");
+      }
+    }
+
+    updateGreeting();
+
+    const interval = setInterval(
+      updateGreeting,
+      60000
+    );
+
+    return () => {
+      clearInterval(interval);
+    };
+  }, []);
 
   const filteredTasks = useMemo(() => {
     let result = dashboardTasks;
@@ -775,7 +805,7 @@ export default function Home() {
         <section className="welcome">
           <div>
             <h1>
-              Good morning,{" "}
+              {greeting},{" "}
               {currentName}{" "}
               <span>👋</span>
             </h1>
